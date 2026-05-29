@@ -1,0 +1,7 @@
+node_modules/
+dist/
+.agents/
+scratch/
+documentation/
+.DS_Store
+skills-lock.json

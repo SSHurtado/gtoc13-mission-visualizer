@@ -1,0 +1,7 @@
+services:
+  visualizer:
+    build: .
+    container_name: altaira-visualizer
+    ports:
+      - "8080:80"
+    restart: unless-stopped

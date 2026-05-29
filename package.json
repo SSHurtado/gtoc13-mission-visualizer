@@ -1,0 +1,17 @@
+{
+  "name": "altaira-system-visualizer",
+  "version": "1.0.0",
+  "description": "3D visualization of the Altaira exoplanetary system from GTOC13",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "three": "^0.176.0"
+  },
+  "devDependencies": {
+    "vite": "^6.3.5"
+  }
+}

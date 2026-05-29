@@ -1,0 +1,802 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="description" content="Interactive 3D visualization of the Altaira exoplanetary system from GTOC13 - explore planetary orbits, asteroid belt, and cometary trajectories." />
+  <title>Altaira System — GTOC13 Trajectory Visualizer</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      background: #000008;
+      overflow: hidden;
+      font-family: 'Inter', 'Segoe UI', sans-serif;
+      color: #e0e8ff;
+    }
+
+    #canvas-container {
+      position: fixed;
+      inset: 0;
+      width: 100vw;
+      height: 100vh;
+    }
+
+    /* ─── HUD overlay ─── */
+    #hud {
+      position: fixed;
+      top: 0; left: 0;
+      width: 100%; height: 100%;
+      pointer-events: none;
+      z-index: 10;
+    }
+
+    /* Top-left title */
+    #title-panel {
+      position: absolute;
+      top: 24px; left: 24px;
+      pointer-events: none;
+    }
+    #title-panel h1 {
+      font-size: 22px;
+      font-weight: 700;
+      letter-spacing: 3px;
+      text-transform: uppercase;
+      background: linear-gradient(135deg, #a0c4ff 0%, #6ee7ff 50%, #c084fc 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+    #title-panel p {
+      font-size: 11px;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      color: rgba(180,200,255,0.55);
+      margin-top: 3px;
+    }
+
+    /* Planet info panel */
+    #info-panel {
+      position: absolute;
+      top: 24px; right: 24px;
+      width: 260px;
+      background: rgba(5, 10, 30, 0.82);
+      border: 1px solid rgba(100, 160, 255, 0.18);
+      border-radius: 12px;
+      padding: 18px;
+      backdrop-filter: blur(16px);
+      pointer-events: none;
+      transition: opacity 0.3s;
+      opacity: 0;
+    }
+    #info-panel.visible { opacity: 1; }
+    #info-planet-name {
+      font-size: 17px;
+      font-weight: 700;
+      letter-spacing: 1px;
+      margin-bottom: 10px;
+    }
+    .info-row {
+      display: flex;
+      justify-content: space-between;
+      font-size: 11.5px;
+      padding: 4px 0;
+      border-bottom: 1px solid rgba(255,255,255,0.05);
+      color: rgba(200,220,255,0.7);
+    }
+    .info-row:last-child { border-bottom: none; }
+    .info-label { color: rgba(150,180,255,0.5); }
+    .info-value { color: #a0d4ff; font-weight: 600; }
+    #info-desc {
+      font-size: 10.5px;
+      color: rgba(180,200,255,0.45);
+      margin-top: 10px;
+      line-height: 1.5;
+    }
+
+    /* Controls panel */
+    #controls-panel {
+      position: absolute;
+      bottom: 24px; left: 24px;
+      pointer-events: all;
+    }
+    .ctrl-group {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 8px;
+      align-items: center;
+    }
+    .ctrl-btn {
+      background: rgba(10, 20, 50, 0.75);
+      border: 1px solid rgba(100,160,255,0.2);
+      border-radius: 8px;
+      padding: 7px 14px;
+      color: rgba(180,210,255,0.8);
+      font-size: 11px;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      cursor: pointer;
+      transition: all 0.2s;
+      backdrop-filter: blur(8px);
+    }
+    .ctrl-btn:hover, .ctrl-btn.active {
+      background: rgba(60, 120, 255, 0.25);
+      border-color: rgba(100,160,255,0.5);
+      color: #a0d4ff;
+    }
+    .ctrl-label {
+      font-size: 10px;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      color: rgba(150,180,255,0.4);
+      margin-right: 4px;
+    }
+    .speed-display {
+      font-size: 12px;
+      color: #6ee7ff;
+      min-width: 70px;
+      text-align: center;
+    }
+
+    /* Speed slider */
+    #speed-slider {
+      -webkit-appearance: none;
+      width: 160px;
+      height: 4px;
+      border-radius: 2px;
+      background: rgba(100,160,255,0.2);
+      outline: none;
+      cursor: pointer;
+    }
+    #speed-slider::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      background: #6ee7ff;
+      cursor: pointer;
+      box-shadow: 0 0 8px #6ee7ff;
+    }
+
+    /* Legend / body list */
+    #legend {
+      position: absolute;
+      bottom: 24px; right: 24px;
+      width: 220px;
+      background: rgba(5,10,30,0.75);
+      border: 1px solid rgba(100,160,255,0.15);
+      border-radius: 12px;
+      padding: 14px 16px;
+      backdrop-filter: blur(12px);
+      pointer-events: all;
+      max-height: min(290px, 35vh);
+      overflow-y: auto;
+    }
+    #legend h3 {
+      font-size: 10px;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      color: rgba(150,180,255,0.5);
+      margin-bottom: 10px;
+    }
+    .legend-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 5px 4px;
+      border-radius: 6px;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    .legend-item:hover { background: rgba(100,160,255,0.08); }
+    .legend-dot {
+      width: 10px; height: 10px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+    .legend-name {
+      font-size: 11.5px;
+      color: rgba(200,220,255,0.8);
+    }
+    .legend-weight {
+      margin-left: auto;
+      font-size: 10px;
+      color: rgba(150,180,255,0.4);
+    }
+    .legend-divider {
+      border: none;
+      border-top: 1px solid rgba(255,255,255,0.06);
+      margin: 6px 0;
+    }
+    #legend::-webkit-scrollbar { width: 3px; }
+    #legend::-webkit-scrollbar-track { background: transparent; }
+    #legend::-webkit-scrollbar-thumb { background: rgba(100,160,255,0.3); border-radius: 2px; }
+
+    /* Time display */
+    #time-display {
+      position: absolute;
+      top: 24px; left: 50%;
+      transform: translateX(-50%);
+      text-align: center;
+      pointer-events: none;
+    }
+    #time-year {
+      font-size: 13px;
+      letter-spacing: 2px;
+      color: rgba(180,210,255,0.5);
+    }
+    #time-value {
+      font-size: 28px;
+      font-weight: 300;
+      letter-spacing: 3px;
+      color: rgba(200,230,255,0.85);
+    }
+
+    #focus-banner {
+      --focus-scale: 1;
+      position: absolute;
+      top: 76px;
+      left: 50%;
+      transform: translateX(-50%) scale(var(--focus-scale));
+      transform-origin: top center;
+      min-width: 180px;
+      padding: 9px 18px 10px;
+      border: 1px solid rgba(120, 190, 255, 0.28);
+      border-radius: 8px;
+      background: rgba(5, 10, 30, 0.74);
+      color: #d9f4ff;
+      font-size: 15px;
+      font-weight: 700;
+      letter-spacing: 2px;
+      text-align: center;
+      text-transform: uppercase;
+      opacity: 0;
+      transition: opacity 0.22s, transform 0.18s;
+      pointer-events: none;
+      backdrop-filter: blur(12px);
+    }
+    #focus-banner.visible { opacity: 1; }
+
+    /* Loading screen */
+    #loading {
+      position: fixed;
+      inset: 0;
+      background: #000008;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-direction: column;
+      z-index: 100;
+      transition: opacity 0.8s;
+    }
+    #loading.fade-out { opacity: 0; pointer-events: none; }
+    #loading h2 {
+      font-size: 28px;
+      letter-spacing: 6px;
+      text-transform: uppercase;
+      background: linear-gradient(135deg, #a0c4ff, #6ee7ff, #c084fc);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+      margin-bottom: 8px;
+    }
+    #loading p {
+      font-size: 11px;
+      letter-spacing: 3px;
+      color: rgba(150,180,255,0.4);
+      margin-bottom: 40px;
+    }
+    .loading-bar-wrap {
+      width: 280px;
+      height: 2px;
+      background: rgba(100,160,255,0.1);
+      border-radius: 1px;
+      overflow: hidden;
+    }
+    .loading-bar {
+      height: 100%;
+      background: linear-gradient(90deg, #6ee7ff, #c084fc);
+      border-radius: 1px;
+      animation: loadAnim 1.8s ease-in-out forwards;
+    }
+    @keyframes loadAnim {
+      from { width: 0%; }
+      to { width: 100%; }
+    }
+
+    /* Tooltip */
+    #tooltip {
+      position: fixed;
+      padding: 6px 12px;
+      background: rgba(5,10,30,0.9);
+      border: 1px solid rgba(100,160,255,0.3);
+      border-radius: 6px;
+      font-size: 11px;
+      letter-spacing: 1px;
+      color: #a0d4ff;
+      pointer-events: none;
+      display: none;
+      backdrop-filter: blur(8px);
+      z-index: 20;
+    }
+
+    /* View modes */
+    #view-modes {
+      position: absolute;
+      top: 50%;
+      left: 24px;
+      transform: translateY(-50%);
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      pointer-events: all;
+    }
+    .view-btn {
+      writing-mode: horizontal-tb;
+      background: rgba(10,20,50,0.75);
+      border: 1px solid rgba(100,160,255,0.2);
+      border-radius: 8px;
+      padding: 8px 12px;
+      color: rgba(180,210,255,0.7);
+      font-size: 10px;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      cursor: pointer;
+      transition: all 0.2s;
+      backdrop-filter: blur(8px);
+    }
+    .view-btn:hover, .view-btn.active {
+      background: rgba(60,120,255,0.25);
+      border-color: rgba(100,160,255,0.5);
+      color: #6ee7ff;
+    }
+
+    #mission-timeline-panel {
+      display: none;
+      position: absolute;
+      bottom: 156px;
+      left: 280px;
+      right: 300px;
+      background: rgba(5,10,30,0.85);
+      border: 1px solid rgba(110,231,255,0.22);
+      border-radius: 12px;
+      padding: 12px 18px;
+      pointer-events: all;
+      backdrop-filter: blur(16px);
+      box-shadow: 0 4px 24px rgba(0,0,0,0.5);
+      z-index: 10;
+    }
+
+    @media (max-width: 700px) {
+      #title-panel {
+        top: 18px;
+        left: 16px;
+      }
+      #title-panel h1 {
+        font-size: 18px;
+        letter-spacing: 2px;
+      }
+      #title-panel p {
+        font-size: 9px;
+        letter-spacing: 1.5px;
+      }
+      #time-display {
+        top: 18px;
+        right: 16px;
+        left: auto;
+        transform: none;
+        text-align: right;
+      }
+      #time-year {
+        font-size: 9px;
+        letter-spacing: 1.5px;
+      }
+      #time-value {
+        font-size: 21px;
+        letter-spacing: 2px;
+      }
+      #focus-banner {
+        top: 68px;
+        left: 16px;
+        transform: scale(var(--focus-scale));
+        transform-origin: top left;
+        min-width: 140px;
+        max-width: calc(100vw - 32px);
+        padding: 8px 12px;
+        font-size: 12px;
+        letter-spacing: 1.5px;
+      }
+      #view-modes {
+        left: 16px;
+        top: 46%;
+      }
+      .view-btn {
+        padding: 7px 10px;
+        font-size: 9px;
+      }
+      #controls-panel {
+        right: 16px;
+        bottom: 14px;
+      }
+      .ctrl-group {
+        flex-wrap: wrap;
+        gap: 6px;
+      }
+      .ctrl-btn {
+        padding: 6px 10px;
+        font-size: 10px;
+      }
+      #speed-slider {
+        width: min(150px, calc(100vw - 156px));
+      }
+      #legend {
+        right: auto;
+        left: min(216px, calc(100vw - 174px));
+        bottom: 128px;
+        width: 158px;
+        max-height: 36vh;
+        padding: 11px 12px;
+      }
+      #legend h3 {
+        font-size: 9px;
+        letter-spacing: 1.5px;
+      }
+      .legend-item {
+        gap: 8px;
+        padding: 5px 2px;
+      }
+      .legend-name {
+        font-size: 10.5px;
+      }
+      .legend-weight {
+        display: none;
+      }
+      #info-panel {
+        top: 82px;
+        right: 16px;
+        width: min(220px, calc(100vw - 32px));
+        padding: 14px;
+      }
+      #mission-timeline-panel {
+        left: 16px;
+        right: 16px;
+        bottom: 190px;
+      }
+    }
+    /* Mission info panel */
+    #mission-panel {
+      position: absolute;
+      top: 24px; right: 24px;
+      width: 260px;
+      background: rgba(5, 10, 30, 0.82);
+      border: 1px solid rgba(110, 231, 255, 0.22);
+      border-radius: 12px;
+      padding: 18px;
+      backdrop-filter: blur(16px);
+      pointer-events: none;
+      transition: opacity 0.3s;
+      opacity: 0;
+    }
+    #mission-panel.visible { opacity: 1; }
+    #mission-panel h3 {
+      font-size: 10px;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      color: rgba(110, 231, 255, 0.6);
+      margin-bottom: 10px;
+    }
+    .mission-stat {
+      display: flex;
+      justify-content: space-between;
+      font-size: 11px;
+      padding: 3px 0;
+      border-bottom: 1px solid rgba(255,255,255,0.04);
+    }
+    .mission-stat:last-child { border-bottom: none; }
+    .mission-stat-label { color: rgba(150,180,255,0.45); }
+    .mission-stat-value { color: #6ee7ff; font-weight: 600; }
+    .mission-flyby-list {
+      margin-top: 8px;
+      font-size: 10px;
+      color: rgba(180,210,255,0.55);
+      line-height: 1.6;
+    }
+    .flyby-science { color: #4ade80; }
+    .flyby-nav { color: rgba(180,200,255,0.4); }
+
+    /* Mission load button accent */
+    .ctrl-btn.mission-btn {
+      border-color: rgba(110, 231, 255, 0.3);
+      color: #6ee7ff;
+    }
+    .ctrl-btn.mission-btn:hover {
+      background: rgba(110, 231, 255, 0.15);
+      border-color: rgba(110, 231, 255, 0.5);
+    }
+    .ctrl-btn.mission-loaded {
+      background: rgba(110, 231, 255, 0.12);
+      border-color: rgba(110, 231, 255, 0.4);
+      color: #6ee7ff;
+    }
+
+    /* Timeline slider */
+    #timeline-slider {
+      -webkit-appearance: none;
+      height: 4px;
+      border-radius: 2px;
+      background: rgba(100,160,255,0.25);
+      outline: none;
+      cursor: pointer;
+    }
+    #timeline-slider::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      background: #6ee7ff;
+      cursor: pointer;
+      box-shadow: 0 0 8px #6ee7ff;
+    }
+
+    /* Validation items styling */
+    .validation-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 10.5px;
+      padding: 4px 0;
+      border-bottom: 1px solid rgba(255,255,255,0.04);
+    }
+    .validation-item:last-child { border-bottom: none; }
+    .validation-name { color: rgba(200,220,255,0.7); }
+    .validation-status { font-weight: bold; font-family: monospace; }
+    .validation-pass { color: #4ade80; }
+    .validation-fail { color: #f87171; }
+    .validation-warning { color: #fbbf24; }
+
+    @keyframes floatUpAndFade {
+      0% {
+        opacity: 1;
+        transform: translate(-50%, 0) scale(1);
+      }
+      100% {
+        opacity: 0;
+        transform: translate(-50%, -24px) scale(0.9);
+      }
+    }
+    .score-diff-float {
+      position: absolute;
+      left: 50%;
+      top: 100%;
+      color: #4ade80;
+      font-family: 'Inter', monospace;
+      font-weight: 600;
+      font-size: 13px;
+      white-space: nowrap;
+      pointer-events: none;
+      text-shadow: 0 0 8px rgba(74, 222, 128, 0.6);
+      z-index: 10;
+      animation: floatUpAndFade 1.6s ease-out forwards;
+    }
+
+    .dash-tab-btn {
+      background: none;
+      border: none;
+      color: rgba(150, 180, 255, 0.5);
+      font-size: 10px;
+      font-weight: bold;
+      letter-spacing: 1.5px;
+      text-transform: uppercase;
+      cursor: pointer;
+      padding: 6px 12px;
+      border-bottom: 2px solid transparent;
+      transition: all 0.2s;
+    }
+    .dash-tab-btn:hover {
+      color: rgba(110, 231, 255, 0.85);
+    }
+    .dash-tab-btn.active {
+      color: #6ee7ff !important;
+      border-bottom-color: #6ee7ff !important;
+    }
+
+  </style>
+</head>
+<body>
+
+<div id="loading">
+  <h2>Altaira System</h2>
+  <p>GTOC13 · Exoplanetary Mission Design</p>
+  <div class="loading-bar-wrap">
+    <div class="loading-bar"></div>
+  </div>
+</div>
+
+<div id="canvas-container"></div>
+<div id="tooltip"></div>
+
+<div id="hud">
+  <!-- Title -->
+  <div id="title-panel">
+    <h1>Altaira System</h1>
+    <p>GTOC13 · Star Type G1v · 11 Bodies</p>
+  </div>
+
+  <!-- Symmetrical Time & Score Panel -->
+  <div id="time-display" style="display: flex; gap: 24px; align-items: center; justify-content: center; background: rgba(5, 10, 30, 0.72); padding: 8px 24px; border-radius: 12px; border: 1px solid rgba(100, 160, 255, 0.22); backdrop-filter: blur(16px); pointer-events: none; max-width: 90vw; box-shadow: 0 4px 30px rgba(0, 0, 0, 0.5);">
+    <div style="text-align: center; min-width: 80px;">
+      <div id="time-year" style="font-size: 10px; letter-spacing: 2px; color: rgba(180, 210, 255, 0.5);">MISSION YEAR</div>
+      <div id="time-value" style="font-size: 24px; font-weight: 300; letter-spacing: 2px; color: rgba(200, 230, 255, 0.85);">0.000</div>
+    </div>
+    <div id="hud-score-divider" style="width: 1px; height: 32px; background: rgba(255,255,255,0.15); display: none;"></div>
+    <div id="hud-score-container" style="display: none; text-align: center; min-width: 130px; position: relative;">
+      <div id="score-label" style="font-size: 10px; letter-spacing: 2px; color: rgba(110, 231, 255, 0.6); text-transform: uppercase;">GTOC13 Score J</div>
+      <div id="score-value-wrapper" style="position: relative; display: inline-block;">
+        <div id="score-value" style="font-size: 24px; font-weight: 300; letter-spacing: 2px; color: #6ee7ff; text-shadow: 0 0 10px rgba(110,231,255,0.5);">0.000000</div>
+      </div>
+    </div>
+  </div>
+
+  <div id="focus-banner"></div>
+
+  <!-- Floating Score Dashboard Window -->
+  <div id="score-dashboard-window" style="display: none; position: absolute; top: 120px; left: 280px; width: 420px; background: rgba(6, 12, 36, 0.85); border: 1px solid rgba(110, 231, 255, 0.3); border-radius: 16px; padding: 18px; backdrop-filter: blur(24px); pointer-events: all; box-shadow: 0 12px 40px rgba(0, 0, 0, 0.7); z-index: 100; font-family: 'Inter', 'Segoe UI', sans-serif; min-width: 320px; min-height: 240px; box-sizing: border-box;">
+    <!-- Header (Draggable part) -->
+    <div id="score-dashboard-header" style="display: flex; align-items: center; justify-content: space-between; cursor: move; border-bottom: 1px solid rgba(110, 231, 255, 0.2); padding-bottom: 8px; margin-bottom: 12px; user-select: none;">
+      <span style="font-size: 11px; letter-spacing: 2px; text-transform: uppercase; color: #6ee7ff; font-weight: bold; display: flex; align-items: center; gap: 6px;">
+        📊 Score Evolution Dashboard
+      </span>
+      <button id="btn-close-score-dashboard" style="background: none; border: none; color: rgba(255,255,255,0.4); cursor: pointer; font-size: 14px; padding: 0 4px; transition: color 0.2s;">✕</button>
+    </div>
+    
+    <!-- Content Grid -->
+    <div style="display: flex; flex-direction: column; gap: 12px;">
+      <!-- Big Score Counter -->
+      <div style="display: flex; justify-content: space-between; align-items: baseline; background: rgba(110, 231, 255, 0.05); padding: 10px 14px; border-radius: 8px; border: 1px solid rgba(110, 231, 255, 0.1); position: relative;">
+        <span style="font-size: 10px; color: rgba(150, 180, 255, 0.6); text-transform: uppercase; letter-spacing: 1px; font-weight: bold;">Current Score J(t)</span>
+        <div id="dash-score-value-wrapper" style="position: relative; display: inline-block;">
+          <span id="dash-score-value" style="font-size: 28px; font-weight: 300; color: #6ee7ff; text-shadow: 0 0 12px rgba(110,231,255,0.6); font-family: monospace; letter-spacing: 1px;">0.000000</span>
+        </div>
+      </div>
+      
+      <!-- Tab Bar -->
+      <div style="display: flex; gap: 4px; border-bottom: 1px solid rgba(110, 231, 255, 0.15); padding-bottom: 2px; margin-bottom: 6px;">
+        <button id="dash-tab-linear" class="dash-tab-btn active">J(t) Evolution</button>
+        <button id="dash-tab-wheel" class="dash-tab-btn">Wheel Plot</button>
+      </div>
+      
+      <!-- Canvas Charts Container -->
+      <div id="dash-charts-container">
+        <canvas id="dash-score-chart" width="384" height="150" style="width: 100%; height: 150px; background: rgba(0,0,0,0.3); border-radius: 8px; border: 1px solid rgba(110, 231, 255, 0.15);"></canvas>
+        <canvas id="dash-wheel-chart" width="384" height="384" style="display: none; width: 100%; height: 384px; background: rgba(0,0,0,0.3); border-radius: 8px; border: 1px solid rgba(110, 231, 255, 0.15);"></canvas>
+      </div>
+      
+      <!-- Scrolling Science Feed -->
+      <div>
+        <div style="font-size: 10px; color: rgba(150,180,255,0.5); text-transform: uppercase; letter-spacing: 1.5px; margin-bottom: 6px; font-weight: bold;">Science Encounters Feed</div>
+        <div id="dash-science-feed" style="max-height: 120px; overflow-y: auto; display: flex; flex-direction: column; gap: 4px; padding-right: 4px; font-size: 10px; line-height: 1.4; scrollbar-width: thin; background: rgba(0,0,0,0.15); border-radius: 8px; padding: 8px; border: 1px solid rgba(255,255,255,0.03);">
+          <!-- Feed items populated dynamically -->
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Grand Tour Checklist Panel -->
+  <div id="grand-tour-checklist-panel" style="display: none; position: absolute; top: 96px; left: 24px; width: 230px; background: rgba(5, 10, 30, 0.82); border: 1px solid rgba(100, 160, 255, 0.25); border-radius: 12px; padding: 14px; backdrop-filter: blur(16px); pointer-events: all; transition: all 0.3s; box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6); z-index: 15;">
+    <div id="checklist-header" style="display: flex; align-items: center; justify-content: space-between; cursor: pointer; border-bottom: 1px solid rgba(255,255,255,0.06); padding-bottom: 6px; margin-bottom: 8px;">
+      <span style="font-size: 10px; letter-spacing: 2px; text-transform: uppercase; color: rgba(110,231,255,0.8); font-weight: bold;">Grand Tour Progress</span>
+      <span id="checklist-toggle-icon" style="color: rgba(110,231,255,0.5); font-size: 10px; transition: transform 0.2s;">▼</span>
+    </div>
+    <div id="checklist-content" style="max-height: 280px; overflow-y: auto; transition: max-height 0.3s ease; scrollbar-width: thin; padding-right: 2px;">
+      <!-- Planets (0/10) -->
+      <div class="checklist-group" style="margin-bottom: 12px;">
+        <div style="display: flex; justify-content: space-between; font-size: 10px; font-weight: bold; margin-bottom: 6px; text-transform: uppercase; letter-spacing: 1px;">
+          <span style="color: rgba(200,220,255,0.85);">Major Planets</span>
+          <span id="checklist-planets-count" style="color: #6ee7ff; font-family: monospace;">0/10</span>
+        </div>
+        <div id="checklist-planets-grid" style="display: grid; grid-template-columns: repeat(5, 1fr); gap: 5px;">
+          <!-- Generated dynamically in main.js -->
+        </div>
+      </div>
+      
+      <!-- Yandi (Dwarf) -->
+      <div class="checklist-group" style="margin-bottom: 12px; padding: 8px 0; border-top: 1px dashed rgba(255,255,255,0.08); border-bottom: 1px dashed rgba(255,255,255,0.08); display: flex; justify-content: space-between; align-items: center; font-size: 10.5px;">
+        <span style="font-weight: bold; color: rgba(200,220,255,0.85);">Yandi (Dwarf Planet)</span>
+        <span id="checklist-yandi-status" style="font-size: 9px; font-family: monospace; color: rgba(255,255,255,0.3); font-weight: bold; border: 1px solid rgba(255,255,255,0.1); padding: 1px 6px; border-radius: 4px; background: rgba(255,255,255,0.02); transition: all 0.2s;">PENDING</span>
+      </div>
+      
+      <!-- Minor Bodies (0/13) -->
+      <div class="checklist-group" style="margin-bottom: 4px;">
+        <div style="display: flex; justify-content: space-between; font-size: 10px; font-weight: bold; margin-bottom: 4px; text-transform: uppercase; letter-spacing: 1px;">
+          <span style="color: rgba(200,220,255,0.85);">Minor Bodies</span>
+          <span id="checklist-minor-count" style="color: #6ee7ff; font-family: monospace;">0/13</span>
+        </div>
+        <div style="width: 100%; height: 5px; background: rgba(100,160,255,0.12); border-radius: 3px; overflow: hidden; margin-top: 5px; border: 1px solid rgba(255,255,255,0.03);">
+          <div id="checklist-minor-progress" style="width: 0%; height: 100%; background: linear-gradient(90deg, #6ee7ff, #4ade80); transition: width 0.3s; box-shadow: 0 0 6px #6ee7ff;"></div>
+        </div>
+      </div>
+      
+      <!-- Unlock Banner -->
+      <div id="grand-tour-multiplier-banner" style="display: none; margin-top: 14px; padding: 8px; border: 1px dashed #4ade80; background: rgba(74, 222, 128, 0.08); border-radius: 6px; text-align: center; font-size: 9px; font-weight: bold; color: #4ade80; text-shadow: 0 0 6px rgba(74,222,128,0.5); box-shadow: 0 0 10px rgba(74,222,128,0.1) inset; letter-spacing: 1px;">
+        🏆 MULTIPLIER UNLOCKED (1.2x)
+      </div>
+    </div>
+  </div>
+
+  <!-- Planet info -->
+  <div id="info-panel">
+    <div id="info-planet-name">—</div>
+    <div id="info-rows"></div>
+    <div id="info-desc"></div>
+  </div>
+
+  <!-- View mode buttons -->
+  <div id="view-modes">
+    <button class="view-btn active" id="btn-view-free">Free Orbit</button>
+    <button class="view-btn" id="btn-view-top">Top View</button>
+    <button class="view-btn" id="btn-view-ecliptic">Ecliptic</button>
+  </div>
+
+  <!-- Mission Timeline panel (hidden by default) -->
+  <div id="mission-timeline-panel">
+    <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; font-size: 11px;">
+      <span style="color: rgba(110, 231, 255, 0.7); letter-spacing: 1px; font-weight: 600; text-transform: uppercase;">Mission Timeline</span>
+      <span id="timeline-progress-text" style="color: #6ee7ff; font-family: monospace; font-weight: 600;">0% (0.00 yr)</span>
+    </div>
+    <div style="display: flex; align-items: center; gap: 12px;">
+      <button class="ctrl-btn" id="btn-timeline-play-mode" style="padding: 5px 10px; font-size: 10px; min-width: 140px; border-color: rgba(110,231,255,0.3); color: #6ee7ff;">🔄 Evolution Mode</button>
+      <input type="range" id="timeline-slider" min="0" max="100" value="0" style="flex-grow: 1;" />
+    </div>
+  </div>
+
+  <!-- Controls -->
+  <div id="controls-panel">
+    <div class="ctrl-group">
+      <span class="ctrl-label">Time</span>
+      <button class="ctrl-btn" id="btn-pause">⏸ Pause</button>
+      <button class="ctrl-btn" id="btn-reset">⟳ Reset</button>
+    </div>
+    <div class="ctrl-group">
+      <span class="ctrl-label">Speed</span>
+      <input type="range" id="speed-slider" min="0" max="1" step="0.001" value="0" />
+      <span class="speed-display" id="speed-val">1 yr/s</span>
+    </div>
+    <div class="ctrl-group">
+      <button class="ctrl-btn active" id="btn-orbits">Orbits</button>
+      <button class="ctrl-btn active" id="btn-asteroids">Asteroids</button>
+      <button class="ctrl-btn active" id="btn-comets">Comets</button>
+      <button class="ctrl-btn active" id="btn-labels">Labels</button>
+    </div>
+    <div class="ctrl-group">
+      <button class="ctrl-btn mission-btn" id="btn-load-mission">📂 Load Mission</button>
+      <button class="ctrl-btn" id="btn-score-dashboard" style="display:none; border-color: rgba(110, 231, 255, 0.4); color: #6ee7ff;">📊 Score Chart</button>
+      <button class="ctrl-btn active" id="btn-view-global" style="display:none">🌍 Global View</button>
+      <button class="ctrl-btn" id="btn-view-follow" style="display:none">🛰️ Follow View</button>
+      <button class="ctrl-btn" id="btn-trail" style="display:none">Trail</button>
+      <button class="ctrl-btn" id="btn-goto-mission" style="display:none">⏩ Go To</button>
+    </div>
+  </div>
+
+  <!-- Hidden file input -->
+  <input type="file" id="mission-file-input" accept=".txt,.csv,.dat" style="display:none" />
+
+  <!-- Mission info -->
+  <div id="mission-panel" style="max-height: 70vh; overflow-y: auto;">
+    <h3>Mission Loaded</h3>
+    <div id="mission-stats"></div>
+    
+
+    <h3 style="margin-top: 14px; margin-bottom: 6px; font-size: 10px; color: rgba(110, 231, 255, 0.6); text-transform: uppercase; letter-spacing: 2px;">Flight Constraints</h3>
+    <div id="mission-validation-list" style="margin-bottom: 4px;"></div>
+  </div>
+
+  <!-- Legend -->
+  <div id="legend">
+    <h3>Planetary Bodies</h3>
+    <div id="legend-list"></div>
+  </div>
+</div>
+
+<script type="module" src="/src/main.js"></script>
+</body>
+</html>
