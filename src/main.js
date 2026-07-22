@@ -125,7 +125,7 @@ function createStarfield(count = 6000) {
 
   scene.add(new THREE.Points(geo, mat));
 }
-createStarfield();
+// createStarfield(); // decorative background stars disabled (distracting in capture)
 
 // ─── Central Star (Altaira) ───────────────────────────────────────────────────
 function createStar() {
