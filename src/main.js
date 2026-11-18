@@ -1272,7 +1272,6 @@ let spacecraftMesh = null;
 let trajectoryLine = null;
 let isFollowingSpacecraft = false;
 let showTrajectoryTrail = true;
-let delayDays = 0;
 let lastUpdateScore = 0;
 let lastUpdateTime = 0;
 let isTimelineMode = false;
@@ -2122,7 +2121,7 @@ function updateScoreBreakdownSidebar() {
   breakdownList.innerHTML = `
     <div class="mission-stat"><span class="mission-stat-label">Total Raw Score</span><span class="mission-stat-value" style="color:#a0c4ff;">${raw.toFixed(6)}</span></div>
     <div class="mission-stat"><span class="mission-stat-label">Grand Tour Bonus (b)</span><span class="mission-stat-value" style="color:#${b > 1 ? '4ade80' : 'a0d4ff'};">${b.toFixed(1)}x</span></div>
-    <div class="mission-stat"><span class="mission-stat-label">Delay Clock Decay (c)</span><span class="mission-stat-value" style="color:#a0c4ff;">${c.toFixed(4)}</span></div>
+    <div class="mission-stat"><span class="mission-stat-label" title="Time bonus as if submitted at the deadline (17 Nov 2025, 18:00 UTC); see TIME_BONUS_C in scoring.js">Time Bonus (c, at deadline)</span><span class="mission-stat-value" style="color:#a0c4ff;">${c.toFixed(4)}</span></div>
     <div class="mission-stat" style="border-top: 1px solid rgba(255,255,255,0.1); padding-top: 6px; margin-top: 4px;"><span class="mission-stat-label" style="font-weight: bold; color: #6ee7ff;">Final Score J</span><span class="mission-stat-value" style="color:#6ee7ff; font-weight: bold; text-shadow: 0 0 8px rgba(110,231,255,0.4);">${J.toFixed(6)}</span></div>
   `;
 }
@@ -2130,30 +2129,88 @@ function updateScoreBreakdownSidebar() {
 function updateValidationSidebar() {
   const valList = document.getElementById('mission-validation-list');
   if (!valList || !activeMission) return;
-  
+
   valList.innerHTML = '';
-  
+
+  const STATUS = {
+    pass: ['validation-pass', '✓'],
+    fail: ['validation-fail', '✗'],
+    warning: ['validation-warning', '⚠'],
+    running: ['validation-running', '…'],
+    skipped: ['validation-skipped', '–'],
+  };
   const checks = activeMission.validationChecks || [];
   checks.forEach(c => {
+    const [statusClass, statusIcon] = STATUS[c.status] || STATUS.pass;
     const item = document.createElement('div');
     item.className = 'validation-item';
-    
-    let statusClass = 'validation-pass';
-    let statusIcon = '✓';
-    if (c.status === 'fail') {
-      statusClass = 'validation-fail';
-      statusIcon = '✗';
-    } else if (c.status === 'warning') {
-      statusClass = 'validation-warning';
-      statusIcon = '⚠';
-    }
-    
-    item.innerHTML = `
-      <span class="validation-name" title="${c.desc}">${c.name}</span>
-      <span class="validation-status ${statusClass}">${statusIcon} ${c.status.toUpperCase()}</span>
-    `;
+
+    const name = document.createElement('span');
+    name.className = 'validation-name';
+    name.textContent = c.name;
+    // Tooltip: what the check enforces, its summary and the first messages.
+    name.title = [c.desc, c.summary, ...(c.messages || [])].filter(Boolean).join('\n');
+
+    const status = document.createElement('span');
+    status.className = `validation-status ${statusClass}`;
+    status.textContent = `${statusIcon} ${c.status.toUpperCase()}`;
+
+    item.append(name, status);
     valList.appendChild(item);
+    if (c.summary) {
+      const summary = document.createElement('div');
+      summary.className = 'validation-summary';
+      summary.textContent = c.summary;
+      valList.appendChild(summary);
+    }
   });
+}
+
+// ─── Sail truth stage ────────────────────────────────────────────────────────
+// Second stage of the sail check (validator.checkSailTruth). It can take
+// several seconds on large submissions, so it runs in a Web Worker and the
+// "Sail Arcs · Truth" line shows RUNNING until it finishes.
+let sailTruthWorker = null;
+
+function startSailTruthCheck(mission) {
+  if (sailTruthWorker) { sailTruthWorker.terminate(); sailTruthWorker = null; }
+  const job = mission.sailTruthJob;
+  if (!job) return;
+  const check = mission.validationChecks.find(c => c.id === 'sailTruth');
+
+  const finish = (result) => {
+    mergeSailTruth(mission.validationChecks, mission.validationErrors, result);
+    mission.sailTruthJob = null;
+    if (mission === activeMission) updateValidationSidebar();
+  };
+  const runInline = () => setTimeout(() => finish(checkSailTruth(mission.rows, job.segments)), 0);
+
+  let worker;
+  try {
+    worker = new Worker(new URL('./sailTruthWorker.js', import.meta.url), { type: 'module' });
+  } catch (err) {
+    console.warn('Sail truth worker unavailable, running inline:', err);
+    runInline();
+    return;
+  }
+  sailTruthWorker = worker;
+  worker.onmessage = (e) => {
+    if (e.data.progress !== undefined) {
+      if (check) check.summary = `Running: ${Math.round(100 * e.data.progress)}% of ${job.segments.length} sail steps`;
+      if (mission === activeMission) updateValidationSidebar();
+      return;
+    }
+    worker.terminate();
+    if (sailTruthWorker === worker) sailTruthWorker = null;
+    finish(e.data.result);
+  };
+  worker.onerror = (err) => {
+    console.warn('Sail truth worker failed, running inline:', err.message);
+    worker.terminate();
+    if (sailTruthWorker === worker) sailTruthWorker = null;
+    runInline();
+  };
+  worker.postMessage({ rows: mission.rows, segments: job.segments });
 }
 
 function updateEncounterLogSidebar() {
@@ -2405,16 +2462,11 @@ function updateScoreUI(renderTime) {
 
 function handleMissionFile(fileText) {
   try {
-    const mission = parseMission(fileText);
+    const mission = parseMission(fileText, { sailTruth: 'defer' });
     activeMission = mission;
-    
-    delayDays = 0;
-    const delaySlider = document.getElementById('delay-slider');
-    if (delaySlider) delaySlider.value = 0;
-    const delayVal = document.getElementById('delay-val');
-    if (delayVal) delayVal.textContent = '0 days';
-    
-    scoringData = computeMissionScoring(activeMission, delayDays);
+
+    // Time bonus is fixed at its deadline value (scoring.js, TIME_BONUS_C).
+    scoringData = computeMissionScoring(activeMission);
     trailPoints = generateTrailPoints(activeMission);
     
     createTrajectoryLine(trailPoints);
@@ -2457,6 +2509,7 @@ function handleMissionFile(fileText) {
     
     updateScoreBreakdownSidebar();
     updateValidationSidebar();
+    startSailTruthCheck(activeMission);
     updateEncounterLogSidebar();
     
     const checklistPanel = document.getElementById('grand-tour-checklist-panel');
@@ -2737,21 +2790,6 @@ if (timelineSlider) {
       
       const renderTime = focusTimeLock ?? simTime;
       timeValue.textContent = renderTime.toFixed(2);
-      updateScoreUI(renderTime);
-    }
-  });
-}
-
-const delaySlider = document.getElementById('delay-slider');
-if (delaySlider) {
-  delaySlider.addEventListener('input', function() {
-    delayDays = Number(this.value);
-    const delayVal = document.getElementById('delay-val');
-    if (delayVal) delayVal.textContent = `${delayDays} days`;
-    if (activeMission) {
-      scoringData = computeMissionScoring(activeMission, delayDays);
-      updateScoreBreakdownSidebar();
-      const renderTime = focusTimeLock ?? simTime;
       updateScoreUI(renderTime);
     }
   });

@@ -50,7 +50,7 @@ export function F_vinf(V) {
 }
 
 /**
- * Calculates the time bonus c.
+ * Calculates the time bonus c (Problem Statement Sec. 3.2).
  * t_days is the days since the competition start.
  */
 export function timeBonusC(t_days) {
@@ -59,6 +59,34 @@ export function timeBonusC(t_days) {
   }
   return -0.005 * t_days + 1.165;
 }
+
+/*
+ * Time bonus used by this scorer: ALWAYS the value at the submission deadline.
+ *
+ * The real score depended on when the file was uploaded (c = 1.13 during the
+ * first 7 days, then decreasing linearly). This scorer deliberately scores every
+ * solution as if it had been submitted in the last minute of the competition,
+ * not the first one, so scores are conservative and comparable with the final
+ * GTOC13 results.
+ *
+ *   competition start  : 20 Oct 2025, 17:00 UTC (problem posted)
+ *   submission deadline: 17 Nov 2025, 18:00 UTC
+ *   t = 28.0417 days  ->  c = 1.165 - 0.005 * 28.0417 = 1.024792
+ *
+ * Why the start is 20 Oct and not the opening of submissions (24 Oct, which
+ * would give c = 1.044792): the statement calls it a "4-week competition" and
+ * its Figure 2 runs to 28 days; and TheAntipodes' official final score
+ * (337.878, arXiv 2607.10150) needs c = 1.02595 for their solution file, i.e.
+ * an upload on 17 Nov at about 12:30 UTC when counted from 20 Oct. Counted from
+ * 24 Oct, that upload would fall four days after the deadline.
+ *
+ * Effect: deadline scores are 1.024792 / 1.13 = 0.9069 of first-week scores.
+ */
+export const COMPETITION_START_UTC = '2025-10-20T17:00:00Z';
+export const SUBMISSION_DEADLINE_UTC = '2025-11-17T18:00:00Z';
+export const DEADLINE_T_DAYS =
+  (Date.parse(SUBMISSION_DEADLINE_UTC) - Date.parse(COMPETITION_START_UTC)) / 86400e3; // 28.0417
+export const TIME_BONUS_C = timeBonusC(DEADLINE_T_DAYS);                                 // 1.024792
 
 /**
  * Estimates the first perihelion epoch (in seconds) from the sequence of rows.
@@ -224,11 +252,14 @@ export function getGrandTourBonus(countedFlybys) {
 
 /**
  * Pre-computes the entire scoring structure for the loaded mission.
+ * The time bonus is always TIME_BONUS_C (submission at the deadline, see above).
  */
-export function computeMissionScoring(mission, t_days = 0) {
+export function computeMissionScoring(mission) {
   const rows = mission.rows || [];
   const rawFlybyDict = extractScienceFlybys(rows);
-  const t_peri = estimateFirstPerihelionEpoch(rows);
+  // First close approach to Altaira as computed by the validator (exact for
+  // conic arcs); fall back to the row-sampled estimate if unavailable.
+  const t_peri = mission.firstPerihelion_s ?? estimateFirstPerihelionEpoch(rows);
   
   // Apply perihelion rule
   const fbDict = filterForPerihelion(rawFlybyDict, t_peri);
@@ -272,7 +303,7 @@ export function computeMissionScoring(mission, t_days = 0) {
   
   const totalRawScore = acc;
   const b = getGrandTourBonus(fbDict);
-  const c = timeBonusC(t_days);
+  const c = TIME_BONUS_C;            // always the deadline value (see TIME_BONUS_C)
   const J = b * c * totalRawScore;
   
   return {
