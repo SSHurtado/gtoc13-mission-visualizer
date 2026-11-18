@@ -14,10 +14,44 @@ import { keplerToCartesian, generateOrbitPath, orbitalPeriod } from './orbital.j
 
 import { parseMission, generateTrailPoints, getPositionAtTime, getTrailIndex } from './missionData.js';
 import { computeMissionScoring, getScoreAtTime, F_vinf } from './scoring.js';
+import { checkSailTruth, mergeSailTruth } from './validator.js';
 
 // ─── Scale factor: 1 AU → N scene units ──────────────────────────────────────
 const AU_SCALE = 1.0;  // 1 scene unit = 1 AU
-const STAR_VISUAL_RADIUS = 0.18; // Visual star radius (not physical)
+const STAR_VISUAL_RADIUS = 0.18; // Star radius drawn from far away (about 39 times its true size)
+
+// Body sizes. Every planet is drawn at its true size relative to Altaira. From
+// far away the star and the planets are enlarged by the same factor so they stay
+// visible; as the camera approaches a body that factor falls to 1 (true size).
+// Altaira's radius is not in the problem data: one solar radius is assumed (G1V).
+const AU_IN_KM = 149597870.691;
+const STAR_TRUE_RADIUS = 695700 / AU_IN_KM;  // 0.00465 AU
+const STAR_SCREEN_FACTOR = 0.012;            // drawn star radius / camera distance while shrinking
+const NOMINAL_BODY_RADIUS_KM = 1000;         // for bodies listed with radius 0 (Yandi)
+const MAX_SIZE_EXAGGERATION = STAR_VISUAL_RADIUS / STAR_TRUE_RADIUS;
+function sizeExaggeration(cameraDistance) {  // 1 = true size
+  return THREE.MathUtils.clamp(
+    cameraDistance * STAR_SCREEN_FACTOR / STAR_TRUE_RADIUS, 1, MAX_SIZE_EXAGGERATION);
+}
+// Asteroids and comets have no radius in the problem data. They get the nominal
+// radius above, but are never drawn smaller than about one pixel so that they
+// can still be found.
+const SMALL_BODY_SCREEN_FACTOR = 0.002;  // minimum drawn radius / camera distance
+function smallBodyRadius(position, relativeSize = 1) {
+  const d = camera.position.distanceTo(position);
+  return Math.max(
+    relativeSize * (NOMINAL_BODY_RADIUS_KM / AU_IN_KM) * sizeExaggeration(d),
+    d * SMALL_BODY_SCREEN_FACTOR);
+}
+// Camera distance from which a focused planet is viewed, in planet radii.
+const FOCUS_DISTANCE_RADII = 7;
+
+// The spacecraft cannot be drawn to scale (a sail of metres is 1e-11 AU). Its
+// model is given a span of about 3,000 km and only appears in close-up; from
+// further away a small marker of constant screen size stands in for it.
+const SC_MODEL_SPAN = 2e-5;                       // AU, sail width of the model
+const SC_CLOSEUP_DISTANCE = SC_MODEL_SPAN * 100;  // model shown inside this camera distance
+const SC_FOLLOW_DISTANCE = SC_MODEL_SPAN * 6;     // camera distance set by the follow view
 const MAX_OUTER_AU = 200;
 const ASTEROID_LIGHT_LAYER = 1;
 
@@ -44,7 +78,7 @@ const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x000008);
 
 // Camera
-const camera = new THREE.PerspectiveCamera(50, W / H, 0.001, 5000);
+const camera = new THREE.PerspectiveCamera(50, W / H, 1e-7, 5000);
 camera.position.set(0, 95, 185);
 camera.lookAt(0, 0, 0);
 camera.layers.enable(ASTEROID_LIGHT_LAYER);
@@ -53,9 +87,9 @@ camera.layers.enable(ASTEROID_LIGHT_LAYER);
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
 controls.dampingFactor = 0.04;
-controls.minDistance = 0.08;
+controls.minDistance = SC_MODEL_SPAN * 1.5; // close enough for true-size bodies and the spacecraft close-up
 controls.maxDistance = 500;
-controls.zoomSpeed = 1.2;
+controls.zoomSpeed = 2.0; // the zoom range now spans from 200 AU down to a planet's radius
 controls.minPolarAngle = 0.15; // avoid gimbal lock look-at singularity at the top pole
 controls.maxPolarAngle = Math.PI - 0.15; // avoid gimbal lock look-at singularity at the bottom pole
 
@@ -136,44 +170,18 @@ function createStar() {
   const coreMesh = new THREE.Mesh(new THREE.SphereGeometry(STAR_VISUAL_RADIUS, 32, 32), coreMat);
   group.add(coreMesh);
 
-  // Corona (additive glow sphere)
+  // Thin corona (additive glow sphere). The wider corona and the flare sprite
+  // were removed: they covered the whole region inside about 1 AU.
   const coronaMat = new THREE.MeshBasicMaterial({
     color: 0xffd580,
     transparent: true,
-    opacity: 0.18,
+    opacity: 0.12,
     blending: THREE.AdditiveBlending,
     depthWrite: false,
     side: THREE.FrontSide,
   });
-  const corona = new THREE.Mesh(new THREE.SphereGeometry(STAR_VISUAL_RADIUS * 2.2, 32, 32), coronaMat);
+  const corona = new THREE.Mesh(new THREE.SphereGeometry(STAR_VISUAL_RADIUS * 1.5, 32, 32), coronaMat);
   group.add(corona);
-
-  const corona2 = corona.clone();
-  corona2.scale.setScalar(1.8);
-  corona2.material.opacity = 0.08;
-  group.add(corona2);
-
-  // Lens flare cross sprite (canvas texture)
-  const flareCanvas = document.createElement('canvas');
-  flareCanvas.width = flareCanvas.height = 128;
-  const ctx = flareCanvas.getContext('2d');
-  const grad = ctx.createRadialGradient(64, 64, 0, 64, 64, 64);
-  grad.addColorStop(0, 'rgba(255,240,200,0.9)');
-  grad.addColorStop(0.3, 'rgba(255,200,100,0.5)');
-  grad.addColorStop(1,   'rgba(255,150,50,0)');
-  ctx.fillStyle = grad;
-  ctx.fillRect(0, 0, 128, 128);
-
-  const flareTex = new THREE.CanvasTexture(flareCanvas);
-  const flareSprite = new THREE.Sprite(new THREE.SpriteMaterial({
-    map: flareTex,
-    blending: THREE.AdditiveBlending,
-    depthWrite: false,
-    transparent: true,
-    opacity: 0.7,
-  }));
-  flareSprite.scale.set(2.5, 2.5, 1);
-  group.add(flareSprite);
 
   scene.add(group);
   return group;
@@ -548,26 +556,6 @@ function createPlanetMaterial(pd) {
   });
 }
 
-function createAtmosphere(pd, radius) {
-  if (pd.id === 1000) return null;
-
-  const atmosphereIds = new Set([2, 3, 4, 7, 8, 10]);
-  const opacity = atmosphereIds.has(pd.id) ? 0.14 : 0.075;
-  const mesh = new THREE.Mesh(
-    new THREE.SphereGeometry(radius * 1.12, 32, 24),
-    new THREE.MeshBasicMaterial({
-      color: pd.glowColor,
-      transparent: true,
-      opacity,
-      blending: THREE.AdditiveBlending,
-      side: THREE.BackSide,
-      depthWrite: false,
-    }),
-  );
-  mesh.userData.baseOpacity = opacity;
-  return mesh;
-}
-
 function createCloudLayer(pd, radius) {
   if (![2, 3, 4].includes(pd.id)) return null;
 
@@ -618,20 +606,15 @@ PLANETS.forEach((pd, idx) => {
   const geo = new THREE.SphereGeometry(size, 48, 32);
 
   const mat = createPlanetMaterial(pd);
+  // Vulcan sits at 0.092 AU, where the star light is about 7 times stronger than
+  // at Yavin. Darken its surface by that factor so its lit side is not blown out.
+  if (isVulcan(pd)) mat.color.setScalar(0.13);
   const mesh = new THREE.Mesh(geo, mat);
   mesh.userData.baseEmissiveIntensity = mat.emissiveIntensity;
   const visualExtras = [];
 
-  // Glow sprite
-  const glow = makePlanetGlow(pd.glowColor, pd.size * 2.5);
-  mesh.add(glow);
-  visualExtras.push(glow);
-
-  const atmosphere = createAtmosphere(pd, size);
-  if (atmosphere) {
-    mesh.add(atmosphere);
-    visualExtras.push(atmosphere);
-  }
+  // No glow sprite and no additive atmosphere shell on any planet: at true size
+  // they were wider than the body and hid what passes close to it.
 
   const cloudLayer = createCloudLayer(pd, size);
   if (cloudLayer) {
@@ -656,7 +639,8 @@ PLANETS.forEach((pd, idx) => {
   planetLabels.push(label);
 
   planetRootMeshes.push(mesh);
-  planetMeshes.push({ mesh, planet: pd, label, visualRadius: size, visualExtras, cloudLayer });
+  const trueRadius = (pd.radius > 0 ? pd.radius : NOMINAL_BODY_RADIUS_KM) / AU_IN_KM;
+  planetMeshes.push({ mesh, planet: pd, label, visualRadius: size, trueRadius, visualExtras, cloudLayer });
 });
 
 // ─── Asteroid Belt ────────────────────────────────────────────────────────────
@@ -677,7 +661,7 @@ const asteroidDummy = new THREE.Object3D();
 const asteroidMesh = createAsteroidField();
 
 function createAsteroidField() {
-  const geo = new THREE.DodecahedronGeometry(0.035, 0);
+  const geo = new THREE.DodecahedronGeometry(1, 0); // unit radius; sized per frame
   const mat = new THREE.MeshStandardMaterial({
     color: 0xffffff,
     roughness: 0.74,
@@ -706,11 +690,8 @@ function updateAsteroidBelt(t = 0) {
       visual.phase * 0.7 + t * visual.spinY,
       visual.phase * 1.3 + t * visual.spinZ,
     );
-    asteroidDummy.scale.set(
-      visual.scale * visual.sx,
-      visual.scale * visual.sy,
-      visual.scale * visual.sz,
-    );
+    const radius = smallBodyRadius(asteroidDummy.position, visual.scale);
+    asteroidDummy.scale.set(radius * visual.sx, radius * visual.sy, radius * visual.sz);
     asteroidDummy.updateMatrix();
     asteroidMesh.setMatrixAt(i, asteroidDummy.matrix);
   });
@@ -755,24 +736,10 @@ function createCometOrbitLine(comet, index) {
 
 const cometOrbitLines = cometData.map((comet, index) => createCometOrbitLine(comet, index));
 
-function makeCometComaTexture() {
-  const canvas = document.createElement('canvas');
-  canvas.width = canvas.height = 128;
-  const ctx = canvas.getContext('2d');
-  const grad = ctx.createRadialGradient(64, 64, 0, 64, 64, 64);
-  grad.addColorStop(0, 'rgba(235, 252, 255, 0.95)');
-  grad.addColorStop(0.25, 'rgba(140, 220, 255, 0.48)');
-  grad.addColorStop(0.72, 'rgba(75, 160, 230, 0.12)');
-  grad.addColorStop(1, 'rgba(0, 0, 0, 0)');
-  ctx.fillStyle = grad;
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
-  return textureFromCanvas(canvas);
-}
-
 function createCometVisual(index) {
   const group = new THREE.Group();
   const core = new THREE.Mesh(
-    new THREE.IcosahedronGeometry(0.035 + (index % 4) * 0.006, 0),
+    new THREE.IcosahedronGeometry(1, 0), // unit radius; sized per frame
     new THREE.MeshStandardMaterial({
       color: 0xd8f6ff,
       emissive: 0x72cfff,
@@ -781,15 +748,9 @@ function createCometVisual(index) {
       flatShading: true,
     }),
   );
-  const coma = new THREE.Sprite(new THREE.SpriteMaterial({
-    map: makeCometComaTexture(),
-    transparent: true,
-    opacity: 0.72,
-    depthWrite: false,
-    blending: THREE.AdditiveBlending,
-  }));
-  coma.scale.setScalar(0.34 + (index % 5) * 0.035);
-  group.add(core, coma);
+  // No coma sprite: it was a third of an AU wide.
+  group.add(core);
+  group.userData.relativeSize = 1 + (index % 4) * 0.17;
   group.userData.core = core;
   group.userData.phase = index * 0.61;
   cometGroup.add(group);
@@ -821,6 +782,7 @@ function updateComets(t) {
     cometHead.set(pos.x, pos.z, pos.y);
     const visual = cometVisuals[i];
     visual.position.copy(cometHead);
+    visual.userData.core.scale.setScalar(smallBodyRadius(cometHead, visual.userData.relativeSize));
     visual.userData.core.rotation.set(
       visual.userData.phase + t * 1.1,
       visual.userData.phase * 0.5 + t * 0.8,
@@ -910,6 +872,8 @@ const focusBanner = document.getElementById('focus-banner');
  * Returns the index into planetMeshes[], or -1 if not found.
  */
 function findPlanetIndex(object) {
+  const labelIdx = planetLabels.indexOf(object);
+  if (labelIdx >= 0) return labelIdx;
   let obj = object;
   while (obj) {
     const idx = planetRootMeshes.indexOf(obj);
@@ -917,6 +881,14 @@ function findPlanetIndex(object) {
     obj = obj.parent;
   }
   return -1;
+}
+
+// True-size planets are often smaller than a pixel, so their labels can be
+// hovered and clicked as well.
+function intersectPlanets() {
+  const hits = raycaster.intersectObjects(planetRootMeshes, true);
+  if (hits.length > 0) return hits;
+  return raycaster.intersectObjects(planetLabels.filter((label) => label.visible), false);
 }
 
 function getPlanetEntry(pd) {
@@ -959,8 +931,8 @@ function updateFocusBannerScale() {
   const entry = getPlanetEntry(focusedPlanet);
   if (!entry) return;
 
-  const distance = Math.max(camera.position.distanceTo(entry.mesh.position), 0.001);
-  const nominalFocusDistance = Math.max(entry.visualRadius * 16, 0.24);
+  const distance = Math.max(camera.position.distanceTo(entry.mesh.position), 1e-9);
+  const nominalFocusDistance = entry.trueRadius * FOCUS_DISTANCE_RADII;
   const scale = THREE.MathUtils.clamp((nominalFocusDistance / distance) * 1.22, 1.08, 2.1);
   focusBanner.style.setProperty('--focus-scale', scale.toFixed(3));
 }
@@ -979,7 +951,7 @@ function updatePlanetLabelScales(dt = 0) {
     const lift = visualRadius * (scale - 1) * 0.55;
     labelTargetPosition
       .copy(mesh.position)
-      .add(baseOffset);
+      .addScaledVector(baseOffset, mesh.scale.x); // follows the drawn size
     labelTargetPosition.y += lift;
 
     const smoothedPosition = label.userData.smoothedPosition;
@@ -1005,7 +977,7 @@ function setPointerFromEvent(e) {
 
 function pickPlanetFromPointer() {
   raycaster.setFromCamera(pointer, camera);
-  const hits = raycaster.intersectObjects(planetRootMeshes, true);
+  const hits = intersectPlanets();
   if (hits.length === 0) return null;
 
   const idx = findPlanetIndex(hits[0].object);
@@ -1030,7 +1002,7 @@ function focusCameraOnPlanet(pd) {
   }
   flightDirection.normalize();
 
-  const focusDistance = Math.max(entry.visualRadius * 16, 0.24);
+  const focusDistance = entry.trueRadius * FOCUS_DISTANCE_RADII;
   focusOffset.copy(flightDirection).multiplyScalar(focusDistance);
   cameraFlight = {
     planet: pd,
@@ -2273,7 +2245,7 @@ function createSpacecraftMesh() {
   // 1. Detailed 3D Model Group (shown in follow mode / zoomed in)
   const modelGroup = new THREE.Group();
   modelGroup.name = 'modelGroup';
-  modelGroup.scale.setScalar(0.08); // Scale down the spacecraft detailed model to be smaller than the planets
+  modelGroup.scale.setScalar(SC_MODEL_SPAN / 0.24); // the sail panel is 0.24 wide in model units
   
   // Add external illumination to the satellite so it is visible from all angles without overexposure
   const keyLight = new THREE.DirectionalLight(0xffffff, 1.2);
@@ -2732,7 +2704,7 @@ document.getElementById('btn-view-follow').addEventListener('click', function() 
   
   if (spacecraftMesh && spacecraftMesh.visible) {
     controls.target.copy(spacecraftMesh.position);
-    focusOffset.set(0.3, 0.15, 0.3);
+    focusOffset.set(0.3, 0.15, 0.3).setLength(SC_FOLLOW_DISTANCE); // close-up on the spacecraft
     camera.position.copy(spacecraftMesh.position).add(focusOffset);
     spacecraftMesh.userData.lastPosition = spacecraftMesh.position.clone();
     controls.update();
@@ -2845,23 +2817,33 @@ function animate() {
       const globalSphere = spacecraftMesh.getObjectByName('globalSphere');
       const locatorArrow = spacecraftMesh.getObjectByName('locatorArrow');
       
+      // Move the follow camera with the spacecraft first, so that the distance
+      // below is the one this frame is drawn with.
+      if (isFollowingSpacecraft) {
+        if (!spacecraftMesh.userData.lastPosition) {
+          spacecraftMesh.userData.lastPosition = spacecraftMesh.position.clone();
+        }
+        const delta = new THREE.Vector3().subVectors(spacecraftMesh.position, spacecraftMesh.userData.lastPosition);
+        spacecraftMesh.userData.lastPosition.copy(spacecraftMesh.position);
+        
+        camera.position.add(delta);
+        controls.target.add(delta);
+      } else {
+        spacecraftMesh.userData.lastPosition = null;
+      }
+
       const camDist = camera.position.distanceTo(spacecraftMesh.position);
       
       // Determine Zoomed-in Follow vs. Global Mode
-      const isZoomed = isFollowingSpacecraft || camDist < 1.5;
+      const isZoomed = camDist < SC_CLOSEUP_DISTANCE;
       
       if (isZoomed) {
         // Zoomed in (Follow / Close Mode)
         if (modelGroup) modelGroup.visible = true;
         if (globalSphere) globalSphere.visible = false;
         
-        // Scale locator arrow down slightly and keep it close
-        if (locatorArrow) {
-          locatorArrow.visible = true;
-          const locScale = THREE.MathUtils.clamp(camDist * 0.4, 0.1, 1.0);
-          locatorArrow.scale.setScalar(locScale);
-          locatorArrow.position.set(0, 0.15 * locScale, 0);
-        }
+        // The locator arrow is not needed in close-up
+        if (locatorArrow) locatorArrow.visible = false;
         
         // Spin the body for visual feedback (child 0 of modelGroup is the bus)
         const bus = spacecraftMesh.getObjectByName('bus');
@@ -2906,30 +2888,19 @@ function animate() {
         if (globalSphere) {
           globalSphere.visible = true;
           // Scale sphere indicator so it is a little smaller and fits clean spacing
-          const sphereScale = THREE.MathUtils.clamp(camDist * 0.02, 0.15, 2.5);
+          const sphereScale = Math.min(camDist * 0.02, 2.5); // constant size on screen
           globalSphere.scale.setScalar(sphereScale);
         }
         
         // Dynamic scaling of locator arrow in global mode
         if (locatorArrow) {
-          const relativeScale = THREE.MathUtils.clamp(camDist * 0.05, 0.5, 10.0);
+          locatorArrow.visible = true;
+          const relativeScale = Math.min(camDist * 0.05, 10.0); // constant size on screen
           locatorArrow.scale.setScalar(relativeScale);
           locatorArrow.position.set(0, 0.20 * relativeScale, 0);
         }
       }
       
-      if (isFollowingSpacecraft) {
-        if (!spacecraftMesh.userData.lastPosition) {
-          spacecraftMesh.userData.lastPosition = spacecraftMesh.position.clone();
-        }
-        const delta = new THREE.Vector3().subVectors(spacecraftMesh.position, spacecraftMesh.userData.lastPosition);
-        spacecraftMesh.userData.lastPosition.copy(spacecraftMesh.position);
-        
-        camera.position.add(delta);
-        controls.target.add(delta);
-      } else {
-        spacecraftMesh.userData.lastPosition = null;
-      }
     } else {
       spacecraftMesh.visible = false;
     }
@@ -2950,7 +2921,7 @@ function animate() {
 
   // Hover detection
   const hits = pointerActive
-    ? (raycaster.setFromCamera(pointer, camera), raycaster.intersectObjects(planetRootMeshes, true))
+    ? (raycaster.setFromCamera(pointer, camera), intersectPlanets())
     : [];
   if (hits.length > 0) {
     const idx = findPlanetIndex(hits[0].object);
@@ -2975,7 +2946,14 @@ function animate() {
 
   // Star corona pulse
   starGroup.children[1].scale.setScalar(1 + 0.014 * Math.sin(now * 0.00028));
-  starGroup.children[2].scale.setScalar(1 + 0.02 * Math.sin(now * 0.00018 + 1));
+
+  // Body sizes: true proportions to the star, enlarged together only from far away.
+  starGroup.scale.setScalar(
+    STAR_TRUE_RADIUS * sizeExaggeration(camera.position.length()) / STAR_VISUAL_RADIUS);
+  planetMeshes.forEach(({ mesh, visualRadius, trueRadius }) => {
+    const drawnRadius = trueRadius * sizeExaggeration(camera.position.distanceTo(mesh.position));
+    mesh.scale.setScalar(drawnRadius / visualRadius);
+  });
 
   // Update time display
   timeValue.textContent = renderTime.toFixed(2);
@@ -2997,17 +2975,23 @@ function animate() {
     updateScoreUI(renderTime);
   }
 
+  controls.minDistance = (!trackedPlanet && !isFollowingSpacecraft
+      && controls.target.length() < STAR_TRUE_RADIUS * 3)
+    ? STAR_TRUE_RADIUS * 3     // do not zoom inside the star
+    : SC_MODEL_SPAN * 1.5;
   controls.update();
   if ((trackedPlanet || isFollowingSpacecraft) && !cameraFlight) {
     const offset = new THREE.Vector3().subVectors(camera.position, controls.target);
     
     // Safety clamp to prevent OrbitControls NaN crashes from extreme zoom collapse
     const dist = offset.length();
-    const minDist = isFollowingSpacecraft ? 0.08 : 0.05;
+    const minDist = isFollowingSpacecraft
+      ? SC_MODEL_SPAN * 1.5
+      : (getPlanetEntry(trackedPlanet)?.trueRadius ?? STAR_TRUE_RADIUS) * 1.5;
     const maxDist = isFollowingSpacecraft ? 1.45 : 500.0;
     
     if (dist < minDist) {
-      if (dist > 0.0001) {
+      if (dist > 1e-9) {
         offset.setLength(minDist);
       } else {
         // Safe fallback direction pointing along positive X axis
